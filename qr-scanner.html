@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#123b68">
+<title>GAH2 QR Scanner</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+:root{color-scheme:light;--navy:#123b68;--blue:#1767a8;--line:#dbe3ec;--muted:#64748b}
+*{box-sizing:border-box}body{margin:0;background:#f4f7fb;color:#1e293b;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}
+main{max-width:620px;margin:0 auto;padding:18px 14px calc(24px + env(safe-area-inset-bottom))}
+header{background:linear-gradient(115deg,#10345d,#1767a8);color:#fff;padding:17px;border-radius:14px;margin-bottom:16px}
+header strong{display:block;font-size:17px}header small{color:#d8e6f5;font-size:11px;letter-spacing:.06em}
+.panel{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 8px 24px rgba(15,45,78,.07)}
+h1{font-size:20px;color:var(--navy);margin:0 0 6px}.muted{font-size:13px;color:var(--muted)}
+#reader{width:100%;min-height:260px;background:#0b1725;border-radius:10px;overflow:hidden;margin-top:14px}
+#reader video{object-fit:cover!important}.status{padding:12px;border-radius:9px;background:#eef5fc;color:#174a78;margin-top:12px;font-size:14px;overflow-wrap:anywhere}
+.actions{display:flex;gap:10px;margin-top:14px}.btn{flex:1;min-height:48px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--navy);font:600 15px inherit;padding:10px;cursor:pointer}.primary{background:var(--blue);border-color:var(--blue);color:#fff}.btn:disabled{opacity:.5}
+@media(max-width:480px){main{padding:10px}.panel{padding:13px}#reader{min-height:230px}}
+</style>
+</head>
+<body><main>
+<header><strong>GMF AEROASIA</strong><small>GAH2 DIGITAL PICKING · QR SCANNER</small></header>
+<section class="panel">
+<h1 id="title">QR Scanner</h1>
+<div class="muted">Point the rear camera at the QR label. The scan result will be returned to your Digital Picking form automatically.</div>
+<div id="reader"></div>
+<div id="status" class="status" role="status">Preparing camera…</div>
+<div class="actions"><button id="retry" class="btn primary" type="button">Retry Camera</button><button id="cancel" class="btn" type="button">Close</button></div>
+</section></main>
+<script>
+(()=>{
+  const params=new URLSearchParams(location.search);
+  const mode=params.get('mode')==='bin'?'bin':'material';
+  const token=params.get('token')||'';
+  const parentOrigin=params.get('parentOrigin')||'';
+  const channelName=params.get('channel')||'';
+  const title=document.getElementById('title');
+  const status=document.getElementById('status');
+  const retry=document.getElementById('retry');
+  let scanner=null, busy=false, channel=null;
+  title.textContent=mode==='bin'?'Scan BIN QR':'Scan Material QR';
+  function setStatus(s){status.textContent=s;}
+  function send(payload){
+    const data=Object.assign({token},payload);
+    let sent=false;
+    try{if(window.opener&&!window.opener.closed&&parentOrigin){window.opener.postMessage(data,parentOrigin);sent=true;}}catch(e){}
+    try{if(channel){channel.postMessage(data);sent=true;}}catch(e){}
+    return sent;
+  }
+  function errorText(err){
+    const msg=String(err&&err.message?err.message:err||'');
+    if(/NotAllowedError|PermissionDeniedError|permission|denied|notallowed/i.test(msg))return 'Camera permission was denied. In iPhone Settings, check Safari website camera access, then reload this scanner.';
+    if(/NotFoundError|DevicesNotFoundError/i.test(msg))return 'No camera was found on this device.';
+    if(/NotReadableError|TrackStartError/i.test(msg))return 'The camera is busy in another app or browser tab. Close other camera apps and retry.';
+    return 'Camera could not start: '+(msg||'Unknown error');
+  }
+  async function stop(){if(scanner){try{if(scanner.isScanning)await scanner.stop();}catch(e){}try{await scanner.clear();}catch(e){}scanner=null;}document.getElementById('reader').innerHTML='';}
+  async function start(){
+    if(busy)return;busy=true;retry.disabled=true;
+    await stop();
+    if(!window.isSecureContext||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){setStatus('Camera access is unavailable. Open this page using its HTTPS GitHub Pages URL in Safari.');busy=false;retry.disabled=false;return;}
+    if(typeof Html5Qrcode==='undefined'){setStatus('QR library did not load. Check the internet connection and retry.');busy=false;retry.disabled=false;return;}
+    setStatus('Requesting camera access. If prompted, choose Allow.');
+    try{
+      scanner=new Html5Qrcode('reader',{formatsToSupport:[Html5QrcodeSupportedFormats.QR_CODE],verbose:false});
+      await scanner.start({facingMode:'environment'},{fps:12,qrbox:(w,h)=>{const side=Math.max(180,Math.min(290,Math.floor(Math.min(w,h)*.78)));return {width:side,height:side};},aspectRatio:1.0},async decodedText=>{
+        if(busy===false)return;busy=false;setStatus('QR detected. Returning result to Digital Picking…');
+        await stop();
+        const sent=send({type:'GAH2_QR_RESULT',mode,decodedText:String(decodedText)});
+        if(sent){setStatus('Scan successful. You can return to the Digital Picking tab.');setTimeout(()=>{try{window.close();}catch(e){}},650);}
+        else{setStatus('QR read: '+decodedText+'. The result could not be sent automatically. Keep this text and return to the Digital Picking tab.');}
+        retry.disabled=false;
+      },()=>{});
+      setStatus('Camera active. Position the QR code inside the frame.');
+    }catch(err){
+      const message=errorText(err);setStatus(message);send({type:'GAH2_QR_ERROR',message});await stop();
+    }finally{busy=false;retry.disabled=false;}
+  }
+  retry.addEventListener('click',start);
+  document.getElementById('cancel').addEventListener('click',async()=>{await stop();try{window.close();}catch(e){}setStatus('Scanner closed. Return to the Digital Picking tab.');});
+  if(channelName&&'BroadcastChannel'in window){try{channel=new BroadcastChannel(channelName);}catch(e){channel=null;}}
+  if(!token||!parentOrigin||!channelName){setStatus('Invalid scanner session. Close this tab and start scanning again from Digital Picking.');retry.disabled=true;return;}
+  start();
+})();
+</script>
+</body></html>
