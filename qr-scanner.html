@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#123b68"><title>GAH2 QR Scanner</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+:root{color-scheme:light;--navy:#123b68;--blue:#1767a8;--line:#dbe3ec;--muted:#64748b}
+*{box-sizing:border-box}body{margin:0;background:#f4f7fb;color:#1e293b;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}
+main{max-width:620px;margin:0 auto;padding:18px 14px calc(24px + env(safe-area-inset-bottom))}
+header{background:linear-gradient(115deg,#10345d,#1767a8);color:#fff;padding:17px;border-radius:14px;margin-bottom:16px}
+header strong{display:block;font-size:17px}header small{color:#d8e6f5;font-size:11px;letter-spacing:.06em}
+.panel{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 8px 24px rgba(15,45,78,.07)}
+h1{font-size:20px;color:var(--navy);margin:0 0 6px}.muted{font-size:13px;color:var(--muted)}
+#reader{width:100%;min-height:260px;background:#0b1725;border-radius:10px;overflow:hidden;margin-top:14px}
+#reader video{object-fit:cover!important}.status{padding:12px;border-radius:9px;background:#eef5fc;color:#174a78;margin-top:12px;font-size:14px;overflow-wrap:anywhere}
+.actions{display:flex;gap:10px;margin-top:14px}.btn{flex:1;min-height:48px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--navy);font:600 15px inherit;padding:10px;cursor:pointer}.primary{background:var(--blue);border-color:var(--blue);color:#fff}.btn:disabled{opacity:.5}
+@media(max-width:480px){main{padding:10px}.panel{padding:13px}#reader{min-height:230px}}
+</style></head>
+<body><main><header><strong>GMF AEROASIA</strong><small>GAH2 DIGITAL PICKING · QR SCANNER</small></header>
+<section class="panel"><h1 id="title">QR Scanner</h1>
+<div class="muted">Arahkan kamera belakang ke QR label. Hasil scan akan dikirim kembali ke form Digital Picking secara otomatis.</div>
+<div id="reader"></div><div id="status" class="status" role="status">Menyiapkan kamera…</div>
+<div class="actions"><button id="retry" class="btn primary" type="button">Retry Camera</button><button id="cancel" class="btn" type="button">Close</button></div>
+</section></main>
+<script>
+(()=>{
+ const params=new URLSearchParams(location.search),mode=params.get('mode')==='bin'?'bin':'material';
+ const token=params.get('token')||'',parentOrigin=params.get('parentOrigin')||'',channelName=params.get('channel')||'';
+ const title=document.getElementById('title'),status=document.getElementById('status'),retry=document.getElementById('retry');
+ let scanner=null,starting=false,scanHandled=false,channel=null;
+ title.textContent=mode==='bin'?'Scan BIN Barcode':'Scan Material QR';
+ document.querySelector('.muted').textContent=mode==='bin'?'Arahkan kamera ke barcode BIN (1D), pastikan seluruh garis barcode terlihat.':'Arahkan kamera belakang ke QR label material. Satu kali scan mengisi Part No., Batch No., dan Serial No.';
+ function setStatus(s){status.textContent=s;}
+ function send(payload){
+  const data=Object.assign({token},payload);let sent=false;
+  try{if(window.opener&&!window.opener.closed&&parentOrigin){window.opener.postMessage(data,parentOrigin);sent=true;}}catch(e){}
+  try{if(channel){channel.postMessage(data);sent=true;}}catch(e){}
+  return sent;
+ }
+ function errorText(err){
+  const msg=String(err&&err.message?err.message:err||'');
+  if(/NotAllowedError|PermissionDeniedError|permission|denied|notallowed/i.test(msg))return 'Izin kamera ditolak. Periksa izin Camera untuk Safari/GitHub Pages, lalu muat ulang halaman scanner.';
+  if(/NotFoundError|DevicesNotFoundError/i.test(msg))return 'Kamera tidak ditemukan pada perangkat ini.';
+  if(/NotReadableError|TrackStartError/i.test(msg))return 'Kamera sedang digunakan aplikasi atau tab lain. Tutup aplikasi kamera lain, lalu coba kembali.';
+  return 'Kamera gagal dijalankan: '+(msg||'Unknown error');
+ }
+ async function stop(){
+  if(scanner){try{if(scanner.isScanning)await scanner.stop();}catch(e){}try{await scanner.clear();}catch(e){}scanner=null;}
+  document.getElementById('reader').innerHTML='';
+ }
+ async function start(){
+  if(starting)return;starting=true;scanHandled=false;retry.disabled=true;await stop();
+  if(!window.isSecureContext||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){setStatus('Akses kamera tidak tersedia. Buka halaman ini melalui HTTPS GitHub Pages di Safari.');starting=false;retry.disabled=false;return;}
+  if(typeof Html5Qrcode==='undefined'){setStatus('Library QR tidak berhasil dimuat. Periksa koneksi internet, lalu coba kembali.');starting=false;retry.disabled=false;return;}
+  setStatus('Meminta akses kamera. Jika muncul permintaan izin, pilih Allow.');
+  try{
+   const barcodeNames=mode==='bin'?['CODE_128','CODE_39','CODE_93','EAN_13','EAN_8','UPC_A','UPC_E','ITF','CODABAR','RSS_14','RSS_EXPANDED','UPC_EAN_EXTENSION','PDF_417','DATA_MATRIX','AZTEC','QR_CODE']:['QR_CODE'];
+   const scanFormats=barcodeNames.map(name=>Html5QrcodeSupportedFormats[name]).filter(value=>value!==undefined);
+   scanner=new Html5Qrcode('reader',{formatsToSupport:scanFormats,verbose:false});
+   await scanner.start({facingMode:'environment'},
+    {fps:20,videoConstraints:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}},qrbox:(w,h)=>{if(mode==='bin'){const width=Math.max(220,Math.min(w-8,Math.floor(w*.96)));const height=Math.max(90,Math.min(h-8,Math.floor(h*.48)));return {width,height};}const side=Math.max(180,Math.min(320,Math.floor(Math.min(w,h)*.82)));return {width:side,height:side};},aspectRatio:mode==='bin'?2.2:1.0},
+    async decodedText=>{
+     // Flag separado: la inicialización de cámara no debe bloquear el callback de lectura.
+     if(scanHandled)return;scanHandled=true;
+     setStatus((mode==='bin'?'Barcode BIN':'QR material')+' berhasil terbaca. Mengirim hasil…');retry.disabled=true;
+     const sent=send({type:'GAH2_QR_RESULT',mode,decodedText:String(decodedText)});
+     if(sent){setStatus('Hasil terkirim. Aplikasi Digital Picking akan menutup tab scanner.');try{await stop();}catch(e){}setTimeout(()=>{try{window.close();}catch(e){}},250);}
+     else{setStatus('Kode terbaca, tetapi gagal dikirim ke Digital Picking. Isi: '+String(decodedText));retry.disabled=false;}
+    },
+    errorMessage=>{
+     if(!scanHandled)setStatus(mode==='bin'?'Barcode belum terbaca. Pastikan seluruh garis barcode masuk area scan, fokus tajam, dan cahaya cukup.':'QR belum terbaca. Pastikan seluruh QR masuk ke area scan, fokus kamera tajam, dan label cukup terang.');
+    });
+   setStatus('Kamera aktif. Arahkan QR ke dalam area scan dan tunggu hingga fokus tajam.');
+  }catch(err){const message=errorText(err);setStatus(message);send({type:'GAH2_QR_ERROR',message});await stop();}
+  finally{starting=false;retry.disabled=false;}
+ }
+ retry.addEventListener('click',start);
+ document.getElementById('cancel').addEventListener('click',async()=>{await stop();setStatus('Scanner ditutup. Kembali ke tab Digital Picking.');try{window.close();}catch(e){}});
+ if(channelName&&'BroadcastChannel'in window){try{channel=new BroadcastChannel(channelName);}catch(e){channel=null;}}
+ if(!token||!parentOrigin||!channelName){setStatus('Sesi scanner tidak valid. Tutup tab ini dan mulai scan dari aplikasi Digital Picking.');retry.disabled=true;return;}
+ start();
+})();
+</script></body></html>
